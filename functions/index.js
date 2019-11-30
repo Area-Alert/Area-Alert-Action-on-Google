@@ -20,7 +20,7 @@ const app = dialogflow({ debug: true })
 
 app.intent('Default Welcome Intent', conv => {
       conv.ask(new SimpleResponse({
-            speech: 'Welcome!, Say make a report to make a report?',
+            speech: 'Welcome!, Say make a report to make a report',
             text: "Click 'make a report' to make a report!"
       }))
       conv.ask(new Suggestions(['Make a Report', 'Cancel']))
@@ -101,9 +101,10 @@ app.intent('natural disaster', conv => {
 })
 
 app.intent('yes - more details', conv => {
-      conv.ask(`Great, Please tell us if people were injured and do they need medical attention?`)
-
       conv.data.report['moreDetails'] = true
+
+      conv.ask(`Great, Please tell us if people were injured and do they need medical attention?`)
+      conv.ask(new Suggestions(['Yes', 'No']))
 })
 
 app.intent('no - more details', conv => {
@@ -123,6 +124,44 @@ app.intent('no - more details', conv => {
       })
 })
 
-app.intent('')
+app.intent('yes - medical help', conv => {
+      conv.data.report['medicalAttention'] = true
+
+      conv.ask('Sure, medical services have been informed and dispatched, should authorities be informed?')
+})
+
+app.intent('no - medical help', conv => {
+      conv.data.report['medicalAttention'] = false
+
+      conv.ask("That's great news, should authorities be informed?")
+})
+
+app.intent('yes - authorities', conv => {
+      conv.data.report['authorities'] = true
+
+      return new Promise((resolve, reject) => {
+            db.collection('reports').doc(String(Number(new Date()))).set(conv.data.report)
+                  .then((docSnap) => {
+                        conv.close("Great, Authorities have been informed, Thanks for using Area Alert. We've recieved your report!")
+                        resolve()
+                        return null
+                  })
+                  .catch(err => console.log(err))
+      })
+})
+
+app.intent('no - authorities', conv => {
+      conv.data.report['authorities'] = false
+
+      return new Promise((resolve, reject) => {
+            db.collection('reports').doc(String(Number(new Date()))).set(conv.data.report)
+                  .then((docSnap) => {
+                        conv.close("Sure, no problem. Thanks for using Area Alert. We've recieved your report!")
+                        resolve()
+                        return null
+                  })
+                  .catch(err => console.log(err))
+      })
+})
 
 exports.areaAlert = functions.https.onRequest(app)
