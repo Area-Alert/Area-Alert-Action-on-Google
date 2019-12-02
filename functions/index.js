@@ -4,6 +4,8 @@ const {
       dialogflow,
       Permission,
       Suggestions,
+      UpdatePermission,
+      List,
       SimpleResponse
 } = require('actions-on-google')
 const functions = require('firebase-functions')
@@ -19,16 +21,20 @@ var db = admin.firestore()
 const app = dialogflow({ debug: true })
 
 app.intent('Default Welcome Intent', conv => {
+      conv.ask
       conv.ask(new SimpleResponse({
             speech: 'Welcome!, Say make a report to make a report',
             text: "Click 'make a report' to make a report!"
       }))
-      conv.ask(new Suggestions(['Make a Report', 'Cancel']))
+      conv.ask(new Suggestions(['Make a Report', 'View Reports nearby']))
 })
 
 app.intent('Make Report', (conv) => {
       const permissions = ['NAME']
       let context = 'To address you by name'
+
+      conv.data.locType = "make"
+
       // Location permissions only work for verified users
       // https://developers.google.com/actions/assistant/guest-users
       if (conv.user.verification === 'VERIFIED') {
@@ -108,7 +114,7 @@ app.intent('yes - more details', conv => {
 })
 
 app.intent('no - more details', conv => {
-      conv.data.report['moreDetails'] = false
+      conv.data['moreDetails'] = false
 
       return new Promise((resolve, reject) => {
             db.collection('reports').doc(String(Number(new Date()))).set(conv.data.report)
@@ -163,5 +169,112 @@ app.intent('no - authorities', conv => {
                   .catch(err => console.log(err))
       })
 })
+
+app.intent('reports near me', conv => {
+      if (conv.user.verification === 'VERIFIED') {
+            // Could use DEVICE_COARSE_LOCATION instead for city, zip code
+            var permissions = ['DEVICE_PRECISE_LOCATION']
+            var context = [' and know your location']
+      } else {
+            conv.close('We need your location to get reports nearby')
+      }
+      const options = {
+            context,
+            permissions,
+      }
+      conv.ask(new Permission(options))
+})
+
+app.intent('reports near me permission_callback', (conv, params, granted) => {
+      if (granted) {
+            const { location } = conv.device
+            const { latitude, longitude } = location.coordinates
+            console.log("TAG", location.city, location.coordinates, location.formattedAddress, location.name, location.placeId)
+            console.log("TAG", latitude, longitude)
+
+            conv.data.loc = conv.device.location.coordinates
+            conv.data.latitude = latitude
+            conv.data.longitude = longitude
+
+            return new Promise((resolve, reject) => getNearByReports(conv, resolve))
+      }
+})
+
+app.intent('ask for push notification', conv => {
+      conv.ask(new UpdatePermission({
+            intent: 'push notification'
+      }))
+})
+
+app.intent('push_notifications_granted', conv => {
+      if (conv.arguments.get('PERMISSION')) {
+            const updatesUserId = conv.arguments.get('UPDATES_USER_ID')
+            console.log('TAG', updatesUserId)
+            conv.close(updatesUserId)
+      }
+})
+
+function getNearByReports(conv, resolve) {
+      const ONE_KM_APPROXIMATE = 0.008162097402023085
+
+      conv.data.inReports = []
+      db.collection('reports').where('verified', '==', true).get()
+            .then(docSnaps => {
+                  docSnaps.forEach(docSnap => {
+                        docSnap = docSnap.data()
+                        console.log(docSnap)
+
+                        function inReport(p1_lat, p1_lon, p2_lat, p2_lon) {
+                              if (Math.sqrt(Math.pow((p1_lat - p2_lat), 2) + Math.pow(p1_lon - p2_lon, 2)) <= 10 * ONE_KM_APPROXIMATE) {
+                                    console.log(true, Math.sqrt(Math.pow((p1_lat - p2_lat), 2) + Math.pow(p1_lon - p2_lon, 2)), p1_lat, p1_lon, p2_lat, p2_lon)
+                                    return true
+                              } else {
+                                    console.log(false, Math.sqrt(Math.pow((p1_lat - p2_lat), 2) + Math.pow(p1_lon - p2_lon, 2)), p1_lat, p1_lon, p2_lat, p2_lon)
+                                    return false
+                              }
+                        }
+
+                        if (docSnap.loc._lat) {
+                              if (inReport(conv.data.loc.latitude, conv.data.loc.longitude, docSnap.loc._lat, docSnap.loc._long)) {
+                                    conv.data.inReports.push(docSnap)
+                              }
+                        } else if (docSnap.loc._latitude) {
+                              if (inReport(conv.data.loc.latitude, conv.data.loc.longitude, docSnap.loc._latitude, docSnap.loc._longitude)) {
+                                    conv.data.inReports.push(docSnap)
+                              }
+                        }
+                  })
+
+                  function getListItems(conv) {
+                        var x = {}
+                        conv.data.inReports.forEach((inReport, i) => {
+                              x[`KEY_${i}`] = {
+                                    title: inReport.report_type,
+                                    description: inReport.report
+                              }
+                        })
+                        console.log(x)
+                        return x
+                  }
+
+                  if (conv.data.inReports.length >= 2 && conv.data.inReports.length < 30) {
+                        var response = new List({
+                              title: 'Reports nearby',
+                              items: getListItems(conv)
+                        })
+                        conv.close(new SimpleResponse({
+                              speech: "These are the reports nearby",
+                              text: "These are the reports nearby"
+                        }))
+                        conv.close(response)
+                  } else {
+                        conv.close("No reports nearby!")
+                  }
+
+                  resolve()
+                  return null
+            })
+            .catch(err => { throw err })
+}
 
 exports.areaAlert = functions.https.onRequest(app)
